@@ -1,0 +1,1 @@
+This is small project including some Unix-shell files written on Groovy language for creating Amazon S3 snapshots of Amazon EBS volumes and RDS instances.
