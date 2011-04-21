@@ -1,6 +1,13 @@
 #!/usr/bin/groovy
 
+@Grapes([
+@Grab(group = 'com.amazonaws', module = 'aws-java-sdk', version = '1.1.9'),
+@GrabExclude("org.codehaus.groovy:groovy")
+])
+
 import DefaultArguments as DA
+
+import com.amazonaws.auth.PropertiesCredentials
 
 // ----------------------------------------------------------------------
 // Inline classes
@@ -13,7 +20,7 @@ class DefaultArguments
 	public static final int hours = 0
 	public static final List availableRegions = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1']
 	public static final String region = availableRegions[0]
-	public static final String credentials = '~/.ec2/AwsCredentials.properties'
+	public static final String credentials = './AwsCredentials.properties'
 }
 
 class EbsSnapshot
@@ -100,6 +107,7 @@ class ShowHelpException extends Exception
 String regionId
 
 String credentialsPath
+PropertiesCredentials credentials
 
 List volumeIds = []
 
@@ -181,6 +189,13 @@ def parseCliArguments = { String[] arguments ->
 
 def loadCredentials = {
 
+	File credentialsFile = new File(credentialsPath)
+	if (!credentialsFile.exists())
+	{
+		throw new IllegalArgumentException("AWS credentials file does not exist: '$credentialsPath'.")
+	}
+
+	credentials = new PropertiesCredentials(credentialsFile)
 }
 
 def createSnapshot = {
