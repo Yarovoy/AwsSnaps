@@ -99,14 +99,15 @@ class ShowHelpException extends Exception
 // Values parsed from arguments.
 String regionId
 
-String credentials
+String credentialsPath
 
 List volumeIds = []
-String volumeId
 
 int weeks = DA.weeks
 int days = DA.days
 int hours = DA.hours
+
+Boolean isVerbose = false
 
 // Another variables.
 int retainHours
@@ -160,7 +161,8 @@ def parseCliArguments = { String[] arguments ->
 	volumeIds = options.arguments()
 
 	regionId = options.r ?: DA.region
-	credentials = options.c ?: DA.credentials
+	credentialsPath = options.c ?: DA.credentials
+	isVerbose = options.v ? true : false
 
 	if (options.w || options.d || options.o)
 	{
@@ -177,7 +179,9 @@ def parseCliArguments = { String[] arguments ->
 	}
 }
 
-def loadCredentials = {}
+def loadCredentials = {
+
+}
 
 def createSnapshot = {
 	println "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)."
