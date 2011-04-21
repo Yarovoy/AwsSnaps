@@ -1,0 +1,271 @@
+#!/usr/bin/groovy
+
+import DefaultArguments as DA
+
+// ----------------------------------------------------------------------
+// Inline classes
+// ----------------------------------------------------------------------
+
+class DefaultArguments
+{
+	public static final int defaultWeeks = 1
+	public static final int defaultDays = 0
+	public static final int defaultHours = 0
+	public static final List availableRegions = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1']
+	public static final String defaultRegion = availableRegions[0]
+}
+
+class EbsSnapshot
+{
+	EbsSnapshot()
+	{}
+
+	String id
+	String volumeId
+	String regionId
+	Date expirationDate = new Date()
+
+
+	void take()
+	{
+		// Create snapshot first.
+		String[] command = [
+				'ec2addsnap',
+				volumeId,
+				'--region', regionId,
+				'-K', System.getenv('EC2_PRIVATE_KEY'),
+				'-C', System.getenv('EC2_CERT'),
+				'--debug',
+				'--description', "Backup of volume '$volumeId' created with EbsSnap Groovy script."
+		]
+
+		println "Taking snapshot for the given volume..."
+
+		Process process = command.execute()
+
+		if (process.waitFor())
+		{
+			process.errorStream.eachLine {println it}
+			println "Process finished with code ${process.exitValue()}"
+		}
+		else
+		{
+			String outputText = process.text
+			id = outputText.find(~/snap-\w+/)
+			println "Done."
+
+			println "Updating metadata of the snapshot..."
+
+			// Then set value of 'expirationDate' tag at the snapshot.
+			command = [
+					'ec2-create-tags',
+					id,
+					'--region', regionId,
+					'-K', System.getenv('EC2_PRIVATE_KEY'),
+					'-C', System.getenv('EC2_CERT'),
+					'--tag', "expirationDate=${expirationDate.toGMTString()}",
+			]
+
+			process = command.execute()
+			if (process.waitFor())
+			{
+				process.errorStream.eachLine {println it}
+				println "Process finished with code ${process.exitValue()}"
+			}
+			else
+			{
+				println "Done."
+			}
+		}
+	}
+}
+
+class EnvironmentException extends Exception
+{
+	EnvironmentException(String message)
+	{
+		super(message)
+	}
+}
+
+// ----------------------------------------------------------------------
+// Script's variables
+// ----------------------------------------------------------------------
+
+// Values parsed from arguments.
+int weeks = DA.defaultWeeks
+int days = DA.defaultDays
+int hours = DA.defaultHours
+String regionId
+List volumeIds = []
+String volumeId
+
+int retainHours
+
+// Create and configure command-line integration builder.
+CliBuilder cli = new CliBuilder()
+cli.with {
+	usage = "ebssnap [OPTIONS] <EBS_VOLUME_ID_1> [… <EBS_VOLUME_ID_N>]"
+	d(longOpt: 'days', args: 1, argName: 'DAYS', "Number of days to retain the snapshot. Default value is $DA.defaultDays.")
+	h(longOpt: 'help', "Print this message")
+	o(longOpt: 'hours', args: 1, argName: 'HOURS', "Number of hours to retain the snapshot. Default value is $DA.defaultHours.")
+	w(longOpt: 'weeks', args: 1, argName: 'WEEKS', "Number of weeks to retain the snapshot. Default value is $DA.defaultWeeks.")
+	r(longOpt: 'region', args: 1, argName: 'REGION', "Code of region where the volume will be placed. Possible values: ${DA.availableRegions.collect {"'$it'"}.join(", ")}. Default value is '$DA.defaultRegion'.")
+}
+
+// ----------------------------------------------------------------------
+// Script's closures
+// ----------------------------------------------------------------------
+
+def checkEnvironment = {
+	/*String JAVA_HOME = System.getenv("JAVA_HOME")
+	if (!JAVA_HOME)
+	{
+		throw new EnvironmentException("Environment variable JAVA_HOME is not set. You must set it before.")
+	}*/
+}
+
+def parseCliArguments = { String[] arguments ->
+
+	OptionAccessor options = cli.parse(arguments)
+
+	if (!options)
+	{
+		throw new IllegalArgumentException("Incorrect arguments.")
+	}
+
+	if (options.h)
+	{
+		cli.usage()
+		return
+	}
+
+	if (!options.arguments()
+			|| !options.arguments().size()
+			|| !options.arguments().get(0))
+	{
+		throw new IllegalArgumentException("You must specify a correct volume_id argument!")
+	}
+
+	volumeId = options.arguments().get(0)
+
+	if (options.w || options.d || options.o)
+	{
+		weeks = options.w ? options.w?.toInteger() : 0
+		days = options.d ? options.d?.toInteger() : 0
+		hours = options.o ? options.o?.toInteger() : 0
+	}
+
+	regionId = options.r ? options.r : DA.defaultRegion
+
+	retainHours = weeks * 7 * 24 + days * 24 + hours
+
+	if (retainHours <= 0)
+	{
+		throw new IllegalArgumentException("Incorrect retain period! Must be larger than 0 hours.")
+	}
+}
+
+def createSnapshot = {
+	println "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)."
+
+	Date expirationDate = new Date()
+	expirationDate.date += (weeks * 7 + days)
+	expirationDate.hours += hours
+	EbsSnapshot ebsSnapshot = new EbsSnapshot(volumeId: volumeId, regionId: regionId, expirationDate: expirationDate)
+	ebsSnapshot.take()
+}
+
+def deleteExpiredSnapshots = {
+	println "Looking for expired snapshots to remove..."
+
+	String[] command = [
+			'ec2-describe-snapshots',
+			'--region', regionId,
+			'-K', System.getenv('EC2_PRIVATE_KEY'),
+			'-C', System.getenv('EC2_CERT'),
+			'-o', 'self',
+			'--filter', 'tag-key=expirationDate'
+	]
+
+	println "--------"
+
+	Process process = command.execute()
+	if (process.waitFor())
+	{
+		process.errorStream.eachLine {println it}
+		println "Process finished with code ${process.exitValue()}"
+	}
+	else
+	{
+		List expiredSnapshots = []
+		String outputText = process.text
+
+		outputText.eachMatch(~/TAG.+snapshot\s(snap-\w+)\s+expirationDate\s+(\d{1,2} \w{3} \d{4} \d{2}:\d{2}:\d{2} GMT)/) {
+			String snapshotId = it[1]
+			Date expirationDate = new Date((String) it[2])
+
+			if (snapshotId && expirationDate && expirationDate < new Date())
+			{
+				expiredSnapshots << snapshotId
+			}
+		}
+
+		if (expiredSnapshots.size())
+		{
+			println "There are ${expiredSnapshots.size()} snapshots to remove."
+			sleep 300
+			for (int i = 0; i < expiredSnapshots.size(); i++)
+			{
+				println "Deleting snapshot ${i + 1} of ${expiredSnapshots.size()}..."
+
+				command = [
+						'ec2-delete-snapshot',
+						expiredSnapshots[i],
+						'--region', regionId,
+						'-K', System.getenv('EC2_PRIVATE_KEY'),
+						'-C', System.getenv('EC2_CERT'),
+				]
+				process = command.execute()
+				if (process.waitFor())
+				{
+					process.errorStream.eachLine {println it}
+					println "Process finished with code ${process.exitValue()}"
+				}
+				else
+				{
+					println "Done."
+					sleep 300
+				}
+			}
+		}
+		else
+		{
+			println "Nothing to remove."
+		}
+	}
+}
+
+// ----------------------------------------------------------------------
+// Executable code
+// ----------------------------------------------------------------------
+
+try
+{
+	checkEnvironment()
+	parseCliArguments(args)
+	//	createSnapshot()
+	//	deleteExpiredSnapshots()
+	sleep 300
+	println "All operations completed successfuly. Bye!"
+}
+catch (IllegalArgumentException e)
+{
+	println e.message
+	cli.usage()
+}
+catch (EnvironmentException e)
+{
+	println e.message
+	println "Attention! The following environment variables are used by the ec2 tools: JAVA_HOME, EC2_HOME, EC2_PRIVATE_KEY, EC2_CERT."
+}
