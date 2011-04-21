@@ -8,11 +8,12 @@ import DefaultArguments as DA
 
 class DefaultArguments
 {
-	public static final int defaultWeeks = 1
-	public static final int defaultDays = 0
-	public static final int defaultHours = 0
+	public static final int weeks = 1
+	public static final int days = 0
+	public static final int hours = 0
 	public static final List availableRegions = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1']
-	public static final String defaultRegion = availableRegions[0]
+	public static final String region = availableRegions[0]
+	public static final String credentials = '~/.ec2/AwsCredentials.properties'
 }
 
 class EbsSnapshot
@@ -88,29 +89,40 @@ class EnvironmentException extends Exception
 	}
 }
 
+class ShowHelpException extends Exception
+{}
+
 // ----------------------------------------------------------------------
 // Script's variables
 // ----------------------------------------------------------------------
 
 // Values parsed from arguments.
-int weeks = DA.defaultWeeks
-int days = DA.defaultDays
-int hours = DA.defaultHours
 String regionId
+
+String credentials
+
 List volumeIds = []
 String volumeId
 
+int weeks = DA.weeks
+int days = DA.days
+int hours = DA.hours
+
+// Another variables.
 int retainHours
 
 // Create and configure command-line integration builder.
 CliBuilder cli = new CliBuilder()
 cli.with {
 	usage = "ebssnap [OPTIONS] <EBS_VOLUME_ID_1> [… <EBS_VOLUME_ID_N>]"
-	d(longOpt: 'days', args: 1, argName: 'DAYS', "Number of days to retain the snapshot. Default value is $DA.defaultDays.")
+	c(longOpt: 'credentials', args: 1, argName: 'PATH', "Path to AWS credentials file. Default value is '$DA.credentials'.")
+	d(longOpt: 'days', args: 1, argName: 'DAYS', "Number of days to retain the snapshot. Default value is $DA.days.")
 	h(longOpt: 'help', "Print this message")
-	o(longOpt: 'hours', args: 1, argName: 'HOURS', "Number of hours to retain the snapshot. Default value is $DA.defaultHours.")
-	w(longOpt: 'weeks', args: 1, argName: 'WEEKS', "Number of weeks to retain the snapshot. Default value is $DA.defaultWeeks.")
-	r(longOpt: 'region', args: 1, argName: 'REGION', "Code of region where the volume will be placed. Possible values: ${DA.availableRegions.collect {"'$it'"}.join(", ")}. Default value is '$DA.defaultRegion'.")
+	o(longOpt: 'hours', args: 1, argName: 'HOURS', "Number of hours to retain the snapshot. Default value is $DA.hours.")
+	r(longOpt: 'region', args: 1, argName: 'REGION', "Code of region where the volume will be placed. Possible values: ${DA.availableRegions.collect {"'$it'"}.join(", ")}. Default value is '$DA.region'.")
+	u(longOpt: 'usage', "Print this message")
+	v(longOpt: 'verbose', 'Enable a verbose mode of script executing.')
+	w(longOpt: 'weeks', args: 1, argName: 'WEEKS', "Number of weeks to retain the snapshot. Default value is $DA.weeks.")
 }
 
 // ----------------------------------------------------------------------
@@ -131,23 +143,24 @@ def parseCliArguments = { String[] arguments ->
 
 	if (!options)
 	{
-		throw new IllegalArgumentException("Incorrect arguments.")
+		throw new IllegalArgumentException("Arguments are incorrect.")
 	}
 
-	if (options.h)
+	if (options.h || options.u)
 	{
-		cli.usage()
-		return
+		throw new ShowHelpException()
 	}
 
 	if (!options.arguments()
-			|| !options.arguments().size()
-			|| !options.arguments().get(0))
+			|| !options.arguments().size())
 	{
-		throw new IllegalArgumentException("You must specify a correct volume_id argument!")
+		throw new IllegalArgumentException("You must specify at least one correct <EBS_VOLUME_ID> argument!")
 	}
 
-	volumeId = options.arguments().get(0)
+	volumeIds = options.arguments()
+
+	regionId = options.r ?: DA.region
+	credentials = options.c ?: DA.credentials
 
 	if (options.w || options.d || options.o)
 	{
@@ -156,8 +169,6 @@ def parseCliArguments = { String[] arguments ->
 		hours = options.o ? options.o?.toInteger() : 0
 	}
 
-	regionId = options.r ? options.r : DA.defaultRegion
-
 	retainHours = weeks * 7 * 24 + days * 24 + hours
 
 	if (retainHours <= 0)
@@ -165,6 +176,8 @@ def parseCliArguments = { String[] arguments ->
 		throw new IllegalArgumentException("Incorrect retain period! Must be larger than 0 hours.")
 	}
 }
+
+def loadCredentials = {}
 
 def createSnapshot = {
 	println "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)."
@@ -254,6 +267,7 @@ try
 {
 	checkEnvironment()
 	parseCliArguments(args)
+	loadCredentials()
 	//	createSnapshot()
 	//	deleteExpiredSnapshots()
 	sleep 300
@@ -262,6 +276,10 @@ try
 catch (IllegalArgumentException e)
 {
 	println e.message
+	cli.usage()
+}
+catch (ShowHelpException e)
+{
 	cli.usage()
 }
 catch (EnvironmentException e)
