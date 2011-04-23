@@ -2,12 +2,17 @@
 
 @Grapes([
 @Grab(group = 'com.amazonaws', module = 'aws-java-sdk', version = '1.1.9'),
+@Grab(group = 'stax', module = 'stax', version = '1.2.0'),
 @GrabExclude("org.codehaus.groovy:groovy")
 ])
 
 import DefaultArguments as DA
 
 import com.amazonaws.auth.PropertiesCredentials
+import com.amazonaws.services.ec2.AmazonEC2Client
+import com.amazonaws.services.ec2.model.Snapshot
+import com.amazonaws.services.ec2.model.DescribeSnapshotsRequest
+import com.amazonaws.services.ec2.model.Filter
 
 // ----------------------------------------------------------------------
 // Inline classes
@@ -25,14 +30,13 @@ class DefaultArguments
 
 class EbsSnapshot
 {
-	EbsSnapshot()
-	{}
-
 	String id
 	String volumeId
 	String regionId
 	Date expirationDate = new Date()
 
+	EbsSnapshot()
+	{}
 
 	void take()
 	{
@@ -138,6 +142,13 @@ cli.with {
 // Script's closures
 // ----------------------------------------------------------------------
 
+def printMessageIfNeed = {String message ->
+	if (isVerbose)
+	{
+		println message
+	}
+}
+
 def checkEnvironment = {
 	/*String JAVA_HOME = System.getenv("JAVA_HOME")
 	if (!JAVA_HOME)
@@ -189,6 +200,8 @@ def parseCliArguments = { String[] arguments ->
 
 def loadCredentials = {
 
+	printMessageIfNeed 'Reading credentials file…'
+
 	File credentialsFile = new File(credentialsPath)
 	if (!credentialsFile.exists())
 	{
@@ -196,16 +209,26 @@ def loadCredentials = {
 	}
 
 	credentials = new PropertiesCredentials(credentialsFile)
+
+	printMessageIfNeed 'Done.'
 }
 
-def createSnapshot = {
-	println "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)."
+def createSnapshots = {
+	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
+	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
+
+	ec2Client.describeSnapshots(new DescribeSnapshotsRequest(ownerIds: ['self'])).snapshots.each {Snapshot snapshot ->
+		println "$snapshot.snapshotId $snapshot.volumeId $snapshot.state ${snapshot.ownerId}"
+	}
+
+
+	/*printMessageIfNeed "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)."
 
 	Date expirationDate = new Date()
 	expirationDate.date += (weeks * 7 + days)
 	expirationDate.hours += hours
 	EbsSnapshot ebsSnapshot = new EbsSnapshot(volumeId: volumeId, regionId: regionId, expirationDate: expirationDate)
-	ebsSnapshot.take()
+	ebsSnapshot.take()*/
 }
 
 def deleteExpiredSnapshots = {
@@ -287,10 +310,10 @@ try
 	checkEnvironment()
 	parseCliArguments(args)
 	loadCredentials()
-	//	createSnapshot()
+	createSnapshots()
 	//	deleteExpiredSnapshots()
 	sleep 300
-	println "All operations completed successfuly. Bye!"
+	printMessageIfNeed "All operations completed successfuly. Bye!"
 }
 catch (IllegalArgumentException e)
 {
