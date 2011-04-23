@@ -10,7 +10,7 @@ import DefaultArguments as DA
 
 import com.amazonaws.auth.PropertiesCredentials
 import com.amazonaws.services.ec2.AmazonEC2Client
-import com.amazonaws.services.ec2.model.CreateSnapshotRequest
+import com.amazonaws.services.ec2.model.*
 
 // ----------------------------------------------------------------------
 // Inline classes
@@ -24,6 +24,68 @@ class DefaultArguments
 	public static final List availableRegions = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1', 'ap-northeast-1']
 	public static final String region = availableRegions[0]
 	public static final String credentials = './AwsCredentials.properties'
+}
+
+class EbsSnapshot
+{
+	String id
+	String volumeId
+	String regionId
+	Date expirationDate = new Date()
+
+	EbsSnapshot()
+	{}
+
+	void take()
+	{
+		// Create snapshot first.
+		String[] command = [
+				'ec2addsnap',
+				volumeId,
+				'--region', regionId,
+				'-K', System.getenv('EC2_PRIVATE_KEY'),
+				'-C', System.getenv('EC2_CERT'),
+				'--debug',
+				'--description', "Backup of volume '$volumeId' created with EbsSnap Groovy script."
+		]
+
+		println "Taking snapshot for the given volume..."
+
+		Process process = command.execute()
+
+		if (process.waitFor())
+		{
+			process.errorStream.eachLine {println it}
+			println "Process finished with code ${process.exitValue()}"
+		} else
+		{
+			String outputText = process.text
+			id = outputText.find(~/snap-\w+/)
+			println "Done."
+
+			println "Updating metadata of the snapshot..."
+
+			// Then set value of 'expirationDate' tag at the snapshot.
+			command = [
+					'ec2-create-tags',
+					id,
+					'--region', regionId,
+					'-K', System.getenv('EC2_PRIVATE_KEY'),
+					'-C', System.getenv('EC2_CERT'),
+					'--tag', "expirationDate=${expirationDate.toGMTString()}",
+			]
+
+			process = command.execute()
+			if (process.waitFor())
+			{
+				process.errorStream.eachLine {println it}
+				println "Process finished with code ${process.exitValue()}"
+			} else
+			{
+				println "Done."
+			}
+		}
+	}
 }
 
 class EnvironmentException extends Exception
@@ -56,6 +118,7 @@ int hours = DA.hours
 Boolean isVerbose = false
 
 // Another variables.
+final String expirationDateTagName = 'expirationDate'
 int retainHours
 
 // Create and configure command-line integration builder.
@@ -76,7 +139,7 @@ cli.with {
 // Script's closures
 // ----------------------------------------------------------------------
 
-def printMessageIfVerbose = {String message ->
+def printInVerboseMode = {String message ->
 	if (isVerbose)
 	{
 		println message
@@ -113,6 +176,11 @@ def parseCliArguments = { String[] arguments ->
 
 	volumeIds = options.arguments()
 
+	if (volumeIds.unique().size() != volumeIds.size())
+	{
+		throw new IllegalArgumentException("Values passed as <EBS_VOLUME_ID> arguments must be unique!")
+	}
+
 	regionId = options.r ?: DA.region
 
 	if (!DA.availableRegions.contains(regionId))
@@ -140,7 +208,7 @@ def parseCliArguments = { String[] arguments ->
 
 def loadCredentials = {
 
-	printMessageIfVerbose 'Reading credentials file…'
+	printInVerboseMode 'Reading credentials file…'
 
 	File credentialsFile = new File(credentialsPath)
 	if (!credentialsFile.exists())
@@ -150,12 +218,13 @@ def loadCredentials = {
 
 	credentials = new PropertiesCredentials(credentialsFile)
 
-	printMessageIfVerbose 'Done.'
+	printInVerboseMode 'Done.'
 }
 
 def createSnapshots = {
 
-	printMessageIfVerbose 'Start creating snapshots.'
+	//  vol-4077a829 vol-c21bb1ab vol-ec228185
+	printInVerboseMode 'Start creating snapshots.'
 
 	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
 	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
@@ -165,29 +234,42 @@ def createSnapshots = {
 	expirationDate.hours += hours
 
 	volumeIds.each {String volumeId ->
-		printMessageIfVerbose "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
+		printInVerboseMode "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
 
-		final CreateSnapshotRequest request = new CreateSnapshotRequest(volumeId, "This snapshot of '$volumeId' volume which was automatically created with ebssnap tool")
+		final CreateSnapshotRequest request = new CreateSnapshotRequest(volumeId, "This snapshot of '$volumeId' volume was automatically created with ebssnap tool")
 
-		//		final Snapshot snapshot = ec2Client.createSnapshot(request).snapshot
-		//
-		//		ec2Client.createTags()
+		printInVerboseMode 'Taking snapshot for the given volume…'
+		final Snapshot snapshot = ec2Client.createSnapshot(request).snapshot
+		printInVerboseMode 'Done.'
 
-		printMessageIfVerbose 'Done.'
+		printInVerboseMode 'Updating metadata tags of the snapshot…'
+		ec2Client.createTags(
+				new CreateTagsRequest(
+						[snapshot.snapshotId],
+						[new Tag(expirationDateTagName, expirationDate.toGMTString())]
+				))
+		printInVerboseMode 'Done.'
 	}
-
-
-	/*
-
-
-	EbsSnapshot ebsSnapshot = new EbsSnapshot(volumeId: volumeId, regionId: regionId, expirationDate: expirationDate)
-	ebsSnapshot.take()*/
 }
 
 def deleteExpiredSnapshots = {
-	println "Looking for expired snapshots to remove..."
+	printInVerboseMode "Looking for expired snapshots to remove..."
 
-	String[] command = [
+	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
+	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
+
+	final DescribeSnapshotsRequest request = new DescribeSnapshotsRequest(ownerIds: ['self'])
+
+	ec2Client.describeSnapshots(request).snapshots.eachWithIndex {Snapshot snapshot, int index ->
+		if(snapshot.tags)
+		{
+			snapshot.tags.find {Tag tag ->
+				tag.key == expirationDateTagName
+			}
+		}
+	}
+
+	/*String[] command = [
 			'ec2-describe-snapshots',
 			'--region', regionId,
 			'-K', System.getenv('EC2_PRIVATE_KEY'),
@@ -248,7 +330,7 @@ def deleteExpiredSnapshots = {
 		{
 			println "Nothing to remove."
 		}
-	}
+	}*/
 }
 
 // ----------------------------------------------------------------------
@@ -260,10 +342,10 @@ try
 	checkEnvironment()
 	parseCliArguments(args)
 	loadCredentials()
-	createSnapshots()
-	//	deleteExpiredSnapshots()
+//	createSnapshots()
+	deleteExpiredSnapshots()
 	sleep 300
-	printMessageIfVerbose "All operations completed successfuly. Bye!"
+	printInVerboseMode "All operations completed successfuly. Bye!"
 }
 catch (IllegalArgumentException e)
 {
