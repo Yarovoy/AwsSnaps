@@ -10,9 +10,7 @@ import DefaultArguments as DA
 
 import com.amazonaws.auth.PropertiesCredentials
 import com.amazonaws.services.ec2.AmazonEC2Client
-import com.amazonaws.services.ec2.model.Snapshot
-import com.amazonaws.services.ec2.model.DescribeSnapshotsRequest
-import com.amazonaws.services.ec2.model.Filter
+import com.amazonaws.services.ec2.model.CreateSnapshotRequest
 
 // ----------------------------------------------------------------------
 // Inline classes
@@ -23,73 +21,9 @@ class DefaultArguments
 	public static final int weeks = 1
 	public static final int days = 0
 	public static final int hours = 0
-	public static final List availableRegions = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1']
+	public static final List availableRegions = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1', 'ap-northeast-1']
 	public static final String region = availableRegions[0]
 	public static final String credentials = './AwsCredentials.properties'
-}
-
-class EbsSnapshot
-{
-	String id
-	String volumeId
-	String regionId
-	Date expirationDate = new Date()
-
-	EbsSnapshot()
-	{}
-
-	void take()
-	{
-		// Create snapshot first.
-		String[] command = [
-				'ec2addsnap',
-				volumeId,
-				'--region', regionId,
-				'-K', System.getenv('EC2_PRIVATE_KEY'),
-				'-C', System.getenv('EC2_CERT'),
-				'--debug',
-				'--description', "Backup of volume '$volumeId' created with EbsSnap Groovy script."
-		]
-
-		println "Taking snapshot for the given volume..."
-
-		Process process = command.execute()
-
-		if (process.waitFor())
-		{
-			process.errorStream.eachLine {println it}
-			println "Process finished with code ${process.exitValue()}"
-		}
-		else
-		{
-			String outputText = process.text
-			id = outputText.find(~/snap-\w+/)
-			println "Done."
-
-			println "Updating metadata of the snapshot..."
-
-			// Then set value of 'expirationDate' tag at the snapshot.
-			command = [
-					'ec2-create-tags',
-					id,
-					'--region', regionId,
-					'-K', System.getenv('EC2_PRIVATE_KEY'),
-					'-C', System.getenv('EC2_CERT'),
-					'--tag', "expirationDate=${expirationDate.toGMTString()}",
-			]
-
-			process = command.execute()
-			if (process.waitFor())
-			{
-				process.errorStream.eachLine {println it}
-				println "Process finished with code ${process.exitValue()}"
-			}
-			else
-			{
-				println "Done."
-			}
-		}
-	}
 }
 
 class EnvironmentException extends Exception
@@ -142,7 +76,7 @@ cli.with {
 // Script's closures
 // ----------------------------------------------------------------------
 
-def printMessageIfNeed = {String message ->
+def printMessageIfVerbose = {String message ->
 	if (isVerbose)
 	{
 		println message
@@ -180,6 +114,12 @@ def parseCliArguments = { String[] arguments ->
 	volumeIds = options.arguments()
 
 	regionId = options.r ?: DA.region
+
+	if (!DA.availableRegions.contains(regionId))
+	{
+		throw new IllegalArgumentException("Value '$regionId' of '--region' argument is incorrect! Possible values of this argument: ${DA.availableRegions.collect {"'$it'"}.join(", ")}.")
+	}
+
 	credentialsPath = options.c ?: DA.credentials
 	isVerbose = options.v ? true : false
 
@@ -194,13 +134,13 @@ def parseCliArguments = { String[] arguments ->
 
 	if (retainHours <= 0)
 	{
-		throw new IllegalArgumentException("Incorrect retain period! Must be larger than 0 hours.")
+		throw new IllegalArgumentException("Incorrect retain period! It must be larger than 0 hours.")
 	}
 }
 
 def loadCredentials = {
 
-	printMessageIfNeed 'Reading credentials file…'
+	printMessageIfVerbose 'Reading credentials file…'
 
 	File credentialsFile = new File(credentialsPath)
 	if (!credentialsFile.exists())
@@ -210,23 +150,36 @@ def loadCredentials = {
 
 	credentials = new PropertiesCredentials(credentialsFile)
 
-	printMessageIfNeed 'Done.'
+	printMessageIfVerbose 'Done.'
 }
 
 def createSnapshots = {
+
+	printMessageIfVerbose 'Start creating snapshots.'
+
 	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
 	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
-
-	ec2Client.describeSnapshots(new DescribeSnapshotsRequest(ownerIds: ['self'])).snapshots.each {Snapshot snapshot ->
-		println "$snapshot.snapshotId $snapshot.volumeId $snapshot.state ${snapshot.ownerId}"
-	}
-
-
-	/*printMessageIfNeed "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)."
 
 	Date expirationDate = new Date()
 	expirationDate.date += (weeks * 7 + days)
 	expirationDate.hours += hours
+
+	volumeIds.each {String volumeId ->
+		printMessageIfVerbose "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
+
+		final CreateSnapshotRequest request = new CreateSnapshotRequest(volumeId, "This snapshot of '$volumeId' volume which was automatically created with ebssnap tool")
+
+		//		final Snapshot snapshot = ec2Client.createSnapshot(request).snapshot
+		//
+		//		ec2Client.createTags()
+
+		printMessageIfVerbose 'Done.'
+	}
+
+
+	/*
+
+
 	EbsSnapshot ebsSnapshot = new EbsSnapshot(volumeId: volumeId, regionId: regionId, expirationDate: expirationDate)
 	ebsSnapshot.take()*/
 }
@@ -250,8 +203,7 @@ def deleteExpiredSnapshots = {
 	{
 		process.errorStream.eachLine {println it}
 		println "Process finished with code ${process.exitValue()}"
-	}
-	else
+	} else
 	{
 		List expiredSnapshots = []
 		String outputText = process.text
@@ -286,15 +238,13 @@ def deleteExpiredSnapshots = {
 				{
 					process.errorStream.eachLine {println it}
 					println "Process finished with code ${process.exitValue()}"
-				}
-				else
+				} else
 				{
 					println "Done."
 					sleep 300
 				}
 			}
-		}
-		else
+		} else
 		{
 			println "Nothing to remove."
 		}
@@ -313,12 +263,12 @@ try
 	createSnapshots()
 	//	deleteExpiredSnapshots()
 	sleep 300
-	printMessageIfNeed "All operations completed successfuly. Bye!"
+	printMessageIfVerbose "All operations completed successfuly. Bye!"
 }
 catch (IllegalArgumentException e)
 {
-	println e.message
-	cli.usage()
+	println "ERROR: $e.message"
+	//	cli.usage()
 }
 catch (ShowHelpException e)
 {
@@ -327,5 +277,4 @@ catch (ShowHelpException e)
 catch (EnvironmentException e)
 {
 	println e.message
-	println "Attention! The following environment variables are used by the ec2 tools: JAVA_HOME, EC2_HOME, EC2_PRIVATE_KEY, EC2_CERT."
 }
