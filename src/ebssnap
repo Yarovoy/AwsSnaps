@@ -222,8 +222,6 @@ def loadCredentials = {
 }
 
 def createSnapshots = {
-
-	//  vol-4077a829 vol-c21bb1ab vol-ec228185
 	printInVerboseMode 'Start creating snapshots.'
 
 	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
@@ -260,77 +258,29 @@ def deleteExpiredSnapshots = {
 
 	final DescribeSnapshotsRequest request = new DescribeSnapshotsRequest(ownerIds: ['self'])
 
-	ec2Client.describeSnapshots(request).snapshots.eachWithIndex {Snapshot snapshot, int index ->
-		if(snapshot.tags)
-		{
-			snapshot.tags.find {Tag tag ->
-				tag.key == expirationDateTagName
-			}
-		}
+	final List expiredSnapshots = ec2Client.describeSnapshots(request).snapshots.findAll {Snapshot snapshot ->
+		snapshot.tags &&
+				snapshot.tags.find {
+					it.key == expirationDateTagName &&
+							it.value
+				} &&
+				(new Date(snapshot.tags.find {
+					it.key == expirationDateTagName
+				}.value) < new Date())
 	}
 
-	/*String[] command = [
-			'ec2-describe-snapshots',
-			'--region', regionId,
-			'-K', System.getenv('EC2_PRIVATE_KEY'),
-			'-C', System.getenv('EC2_CERT'),
-			'-o', 'self',
-			'--filter', 'tag-key=expirationDate'
-	]
-
-	println "--------"
-
-	Process process = command.execute()
-	if (process.waitFor())
+	if (!expiredSnapshots)
 	{
-		process.errorStream.eachLine {println it}
-		println "Process finished with code ${process.exitValue()}"
-	} else
-	{
-		List expiredSnapshots = []
-		String outputText = process.text
+		printInVerboseMode "Nothing to remove."
+		return
+	}
 
-		outputText.eachMatch(~/TAG.+snapshot\s(snap-\w+)\s+expirationDate\s+(\d{1,2} \w{3} \d{4} \d{2}:\d{2}:\d{2} GMT)/) {
-			String snapshotId = it[1]
-			Date expirationDate = new Date((String) it[2])
-
-			if (snapshotId && expirationDate && expirationDate < new Date())
-			{
-				expiredSnapshots << snapshotId
-			}
-		}
-
-		if (expiredSnapshots.size())
-		{
-			println "There are ${expiredSnapshots.size()} snapshots to remove."
-			sleep 300
-			for (int i = 0; i < expiredSnapshots.size(); i++)
-			{
-				println "Deleting snapshot ${i + 1} of ${expiredSnapshots.size()}..."
-
-				command = [
-						'ec2-delete-snapshot',
-						expiredSnapshots[i],
-						'--region', regionId,
-						'-K', System.getenv('EC2_PRIVATE_KEY'),
-						'-C', System.getenv('EC2_CERT'),
-				]
-				process = command.execute()
-				if (process.waitFor())
-				{
-					process.errorStream.eachLine {println it}
-					println "Process finished with code ${process.exitValue()}"
-				} else
-				{
-					println "Done."
-					sleep 300
-				}
-			}
-		} else
-		{
-			println "Nothing to remove."
-		}
-	}*/
+	printInVerboseMode "There are ${expiredSnapshots.size()} snapshots to remove."
+	expiredSnapshots.eachWithIndex {Snapshot snapshot, int index ->
+		printInVerboseMode "Deleting snapshot ${index + 1} of ${expiredSnapshots.size()}…"
+		ec2Client.deleteSnapshot(new DeleteSnapshotRequest(snapshot.snapshotId))
+		printInVerboseMode 'Done.'
+	}
 }
 
 // ----------------------------------------------------------------------
@@ -342,7 +292,7 @@ try
 	checkEnvironment()
 	parseCliArguments(args)
 	loadCredentials()
-//	createSnapshots()
+	createSnapshots()
 	deleteExpiredSnapshots()
 	sleep 300
 	printInVerboseMode "All operations completed successfuly. Bye!"
@@ -350,7 +300,6 @@ try
 catch (IllegalArgumentException e)
 {
 	println "ERROR: $e.message"
-	//	cli.usage()
 }
 catch (ShowHelpException e)
 {
