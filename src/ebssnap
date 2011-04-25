@@ -27,14 +27,6 @@ class DefaultArguments
 	public static final String credentials = './AwsCredentials.properties'
 }
 
-class EnvironmentException extends Exception
-{
-	EnvironmentException(String message)
-	{
-		super(message)
-	}
-}
-
 class ShowHelpException extends Exception
 {}
 
@@ -83,14 +75,6 @@ def printInVerboseMode = {String message ->
 	{
 		println message
 	}
-}
-
-def checkEnvironment = {
-	/*String JAVA_HOME = System.getenv("JAVA_HOME")
-	if (!JAVA_HOME)
-	{
-		throw new EnvironmentException("Environment variable JAVA_HOME is not set. You must set it before.")
-	}*/
 }
 
 def parseCliArguments = { String[] arguments ->
@@ -238,7 +222,6 @@ def deleteExpiredSnapshots = {
 
 try
 {
-	checkEnvironment()
 	parseCliArguments(args)
 	loadCredentials()
 	createSnapshots()
