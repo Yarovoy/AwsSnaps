@@ -200,7 +200,7 @@ def createSnapshots = {
 }
 
 def deleteExpiredSnapshots = {
-	printInVerboseMode "Looking for expired snapshots to remove…"
+	printInVerboseMode "Looking for expired snapshots to delete…"
 
 	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
 	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
@@ -220,11 +220,11 @@ def deleteExpiredSnapshots = {
 
 	if (!expiredSnapshots)
 	{
-		printInVerboseMode "Nothing to remove."
+		printInVerboseMode "Nothing to delete."
 		return
 	}
 
-	printInVerboseMode "There are ${expiredSnapshots.size()} snapshots to remove."
+	printInVerboseMode "There are ${expiredSnapshots.size()} snapshots to delete."
 	expiredSnapshots.eachWithIndex {Snapshot snapshot, int index ->
 		printInVerboseMode "Deleting snapshot ${index + 1} of ${expiredSnapshots.size()}…"
 		ec2Client.deleteSnapshot(new DeleteSnapshotRequest(snapshot.snapshotId))
