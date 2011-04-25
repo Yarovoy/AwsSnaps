@@ -8,10 +8,13 @@
 
 import DefaultArguments as DA
 
-import com.amazonaws.AmazonClientException
 import com.amazonaws.auth.PropertiesCredentials
-import com.amazonaws.services.ec2.AmazonEC2Client
-import com.amazonaws.services.ec2.model.*
+import com.amazonaws.services.rds.AmazonRDSClient
+import com.amazonaws.services.rds.model.CreateDBSnapshotRequest
+import com.amazonaws.services.rds.model.DBSnapshot
+import com.amazonaws.services.rds.model.DeleteDBSnapshotRequest
+import com.amazonaws.services.rds.model.DescribeDBSnapshotsRequest
+import java.text.SimpleDateFormat
 
 // ----------------------------------------------------------------------
 // Inline classes
@@ -40,7 +43,7 @@ String regionId
 String credentialsPath
 PropertiesCredentials credentials
 
-List volumeIds = []
+List instanceIds = []
 
 int weeks = DA.weeks
 int days = DA.days
@@ -49,13 +52,14 @@ int hours = DA.hours
 Boolean isVerbose = false
 
 // Another variables.
-final String expirationDateTagName = 'expirationDate'
+final String expirationDatePattern = 'yyyy-MM-dd-HH-mm-z'
+final String timeZoneString = 'GMT'
 int retainHours
 
 // Create and configure command-line integration builder.
 CliBuilder cli = new CliBuilder()
 cli.with {
-	usage = "ebssnap [OPTIONS] <EBS_VOLUME_ID_1> [… <EBS_VOLUME_ID_N>]"
+	usage = "rdssnap [OPTIONS] <RDS_INSTANCE_ID_1> [… <RDS_INSTANCE_ID_N>]"
 	c(longOpt: 'credentials', args: 1, argName: 'PATH', "Path to AWS credentials file. Default value is '$DA.credentials'.")
 	d(longOpt: 'days', args: 1, argName: 'DAYS', "Number of days to retain the snapshot. Default value is $DA.days.")
 	h(longOpt: 'help', "Print this message.")
@@ -94,14 +98,14 @@ def parseCliArguments = { String[] arguments ->
 	if (!options.arguments()
 			|| !options.arguments().size())
 	{
-		throw new IllegalArgumentException("You must specify at least one correct <EBS_VOLUME_ID> argument!")
+		throw new IllegalArgumentException("You must specify at least one correct <RDS_INSTANCE_ID> argument!")
 	}
 
-	volumeIds = options.arguments()
+	instanceIds = options.arguments()
 
-	if (volumeIds.unique().size() != volumeIds.size())
+	if (instanceIds.unique().size() != instanceIds.size())
 	{
-		throw new IllegalArgumentException("Values passed as <EBS_VOLUME_ID> arguments must be unique!")
+		throw new IllegalArgumentException("Values passed as <RDS_INSTANCE_ID> arguments must be unique!")
 	}
 
 	regionId = options.r ?: DA.region
@@ -147,59 +151,48 @@ def loadCredentials = {
 def createSnapshots = {
 	printInVerboseMode 'Start creating snapshots.'
 
-	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
-	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
+	AmazonRDSClient rdsClient = new AmazonRDSClient(credentials)
+	rdsClient.endpoint = "rds.${regionId}.amazonaws.com"
 
 	Date expirationDate = new Date()
 	expirationDate.date += (weeks * 7 + days)
 	expirationDate.hours += hours
+	//	expirationDate.minutes += 3
 
-	volumeIds.each {String volumeId ->
-		printInVerboseMode "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
+	SimpleDateFormat sdf = new SimpleDateFormat(expirationDatePattern)
+	sdf.timeZone = TimeZone.getTimeZone(timeZoneString)
+	sdf.format(expirationDate)
 
-		final CreateSnapshotRequest request = new CreateSnapshotRequest(volumeId, "This snapshot of '$volumeId' volume was automatically created with ebssnap tool")
+	instanceIds.each {String instanceId ->
+		printInVerboseMode "Createing dbSnapshot for instance \"$instanceId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
 
-		printInVerboseMode 'Taking snapshot for the given volume…'
-		final Snapshot snapshot = ec2Client.createSnapshot(request).snapshot
+		final CreateDBSnapshotRequest request = new CreateDBSnapshotRequest("rdssnap-$instanceId-${sdf.format(expirationDate)}", instanceId)
+
+		rdsClient.createDBSnapshot(request)
+
 		printInVerboseMode 'Done.'
-
-		printInVerboseMode 'Updating metadata tags of the snapshot…'
-		try
-		{
-			ec2Client.createTags(
-					new CreateTagsRequest(
-							[snapshot.snapshotId],
-							[new Tag(expirationDateTagName, expirationDate.toGMTString())]
-					))
-			printInVerboseMode 'Done.'
-		}
-		catch (AmazonClientException e)
-		{
-			println "Cannot create exiration tag for snapshot '$snapshot.snapshotId'. Try to remove the snapshot."
-			ec2Client.deleteSnapshot(new DeleteSnapshotRequest(snapshot.snapshotId))
-			println 'Done.'
-			throw e
-		}
 	}
 }
 
 def deleteExpiredSnapshots = {
 	printInVerboseMode "Looking for expired snapshots to delete…"
 
-	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
-	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
+	AmazonRDSClient rdsClient = new AmazonRDSClient(credentials)
+	rdsClient.endpoint = "rds.${regionId}.amazonaws.com"
 
-	final DescribeSnapshotsRequest request = new DescribeSnapshotsRequest(ownerIds: ['self'])
+	final List expiredSnapshots = []
 
-	final List expiredSnapshots = ec2Client.describeSnapshots(request).snapshots.findAll {Snapshot snapshot ->
-		snapshot.tags &&
-				snapshot.tags.find {
-					it.key == expirationDateTagName &&
-							it.value
-				} &&
-				(new Date(snapshot.tags.find {
-					it.key == expirationDateTagName
-				}.value) < new Date())
+	rdsClient.describeDBSnapshots(new DescribeDBSnapshotsRequest()).DBSnapshots.each {DBSnapshot dbSnapshot ->
+
+		println "Snapshot '$dbSnapshot.DBSnapshotIdentifier' of instance '$dbSnapshot.DBInstanceIdentifier'"
+
+		dbSnapshot.DBSnapshotIdentifier.eachMatch(~/rdssnap-(\w+)-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\w+)/) {
+			final Date expirationDate = Date.parse(expirationDatePattern, it[2])
+			if (expirationDate < new Date())
+			{
+				expiredSnapshots << dbSnapshot
+			}
+		}
 	}
 
 	if (!expiredSnapshots)
@@ -208,10 +201,11 @@ def deleteExpiredSnapshots = {
 		return
 	}
 
-	printInVerboseMode "There are ${expiredSnapshots.size()} snapshots to delete."
-	expiredSnapshots.eachWithIndex {Snapshot snapshot, int index ->
+	printInVerboseMode "There are ${expiredSnapshots.size()} snapshot(s) to delete."
+	expiredSnapshots.eachWithIndex {DBSnapshot dbSnapshot, int index ->
+
 		printInVerboseMode "Deleting snapshot ${index + 1} of ${expiredSnapshots.size()}…"
-		ec2Client.deleteSnapshot(new DeleteSnapshotRequest(snapshot.snapshotId))
+		rdsClient.deleteDBSnapshot(new DeleteDBSnapshotRequest(dbSnapshot.DBSnapshotIdentifier))
 		printInVerboseMode 'Done.'
 	}
 }
