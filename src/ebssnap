@@ -8,6 +8,7 @@
 
 import DefaultArguments as DA
 
+import com.amazonaws.AmazonClientException
 import com.amazonaws.auth.PropertiesCredentials
 import com.amazonaws.services.ec2.AmazonEC2Client
 import com.amazonaws.services.ec2.model.*
@@ -24,68 +25,6 @@ class DefaultArguments
 	public static final List availableRegions = ['us-east-1', 'us-west-1', 'eu-west-1', 'ap-southeast-1', 'ap-northeast-1']
 	public static final String region = availableRegions[0]
 	public static final String credentials = './AwsCredentials.properties'
-}
-
-class EbsSnapshot
-{
-	String id
-	String volumeId
-	String regionId
-	Date expirationDate = new Date()
-
-	EbsSnapshot()
-	{}
-
-	void take()
-	{
-		// Create snapshot first.
-		String[] command = [
-				'ec2addsnap',
-				volumeId,
-				'--region', regionId,
-				'-K', System.getenv('EC2_PRIVATE_KEY'),
-				'-C', System.getenv('EC2_CERT'),
-				'--debug',
-				'--description', "Backup of volume '$volumeId' created with EbsSnap Groovy script."
-		]
-
-		println "Taking snapshot for the given volume..."
-
-		Process process = command.execute()
-
-		if (process.waitFor())
-		{
-			process.errorStream.eachLine {println it}
-			println "Process finished with code ${process.exitValue()}"
-		} else
-		{
-			String outputText = process.text
-			id = outputText.find(~/snap-\w+/)
-			println "Done."
-
-			println "Updating metadata of the snapshot..."
-
-			// Then set value of 'expirationDate' tag at the snapshot.
-			command = [
-					'ec2-create-tags',
-					id,
-					'--region', regionId,
-					'-K', System.getenv('EC2_PRIVATE_KEY'),
-					'-C', System.getenv('EC2_CERT'),
-					'--tag', "expirationDate=${expirationDate.toGMTString()}",
-			]
-
-			process = command.execute()
-			if (process.waitFor())
-			{
-				process.errorStream.eachLine {println it}
-				println "Process finished with code ${process.exitValue()}"
-			} else
-			{
-				println "Done."
-			}
-		}
-	}
 }
 
 class EnvironmentException extends Exception
@@ -241,17 +180,27 @@ def createSnapshots = {
 		printInVerboseMode 'Done.'
 
 		printInVerboseMode 'Updating metadata tags of the snapshot…'
-		ec2Client.createTags(
-				new CreateTagsRequest(
-						[snapshot.snapshotId],
-						[new Tag(expirationDateTagName, expirationDate.toGMTString())]
-				))
-		printInVerboseMode 'Done.'
+		try
+		{
+			ec2Client.createTags(
+					new CreateTagsRequest(
+							[snapshot.snapshotId],
+							[new Tag(expirationDateTagName, expirationDate.toGMTString())]
+					))
+			printInVerboseMode 'Done.'
+		}
+		catch (AmazonClientException e)
+		{
+			println "Cannot create exiration tag for snapshot '$snapshot.snapshotId'. Try to remove the snapshot."
+			ec2Client.deleteSnapshot(new DeleteSnapshotRequest(snapshot.snapshotId))
+			println 'Done.'
+			throw e
+		}
 	}
 }
 
 def deleteExpiredSnapshots = {
-	printInVerboseMode "Looking for expired snapshots to remove..."
+	printInVerboseMode "Looking for expired snapshots to remove…"
 
 	AmazonEC2Client ec2Client = new AmazonEC2Client(credentials)
 	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
@@ -297,15 +246,11 @@ try
 	sleep 300
 	printInVerboseMode "All operations completed successfuly. Bye!"
 }
-catch (IllegalArgumentException e)
-{
-	println "ERROR: $e.message"
-}
 catch (ShowHelpException e)
 {
 	cli.usage()
 }
-catch (EnvironmentException e)
+catch (Exception e)
 {
-	println e.message
+	println "ERROR: $e.message"
 }
