@@ -161,7 +161,6 @@ def createSnapshots = {
 
 	SimpleDateFormat sdf = new SimpleDateFormat(expirationDatePattern)
 	sdf.timeZone = TimeZone.getTimeZone(timeZoneString)
-	sdf.format(expirationDate)
 
 	instanceIds.each {String instanceId ->
 		printInVerboseMode "Createing dbSnapshot for instance \"$instanceId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
