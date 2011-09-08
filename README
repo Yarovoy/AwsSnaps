@@ -1,1 +1,1 @@
-This is small project including some Unix-shell files written on Groovy language which could be used for creating Amazon S3 snapshots of Amazon EBS volumes and RDS instances.
+This is a small project including some Unix-shell files written on Groovy language which could be used for creating Amazon S3 snapshots of Amazon EBS volumes and RDS instances.
