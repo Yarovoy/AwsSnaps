@@ -162,7 +162,7 @@ def createSnapshots = {
 	expirationDate.hours += hours
 
 	volumeIds.each {String volumeId ->
-		printInVerboseMode "Createing snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
+		printInVerboseMode "Creating snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
 
 		final CreateSnapshotRequest request = new CreateSnapshotRequest(volumeId, "Automatically created by ebssnap script.")
 
