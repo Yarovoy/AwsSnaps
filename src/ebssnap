@@ -19,6 +19,7 @@ import com.amazonaws.services.ec2.model.*
 
 class DefaultArguments
 {
+	public static final int months = 0
 	public static final int weeks = 1
 	public static final int days = 0
 	public static final int hours = 0
@@ -42,9 +43,11 @@ PropertiesCredentials credentials
 
 List volumeIds = []
 
+int months = DA.months
 int weeks = DA.weeks
 int days = DA.days
 int hours = DA.hours
+
 String name = null
 
 Boolean isVerbose = false
@@ -52,7 +55,6 @@ Boolean isVerbose = false
 // Another variables.
 final String SNAPSHOT_NAME_TAG_NAME = 'Name'
 final String EXPIRATION_DATE_TAG_NAME = 'expirationDate'
-int retainHours
 
 // Create and configure command-line integration builder.
 CliBuilder cli = new CliBuilder()
@@ -62,10 +64,11 @@ cli.with {
 	d(longOpt: 'days', args: 1, argName: 'DAYS', "Number of days to retain the snapshot. Default value is $DA.days.")
 	h(longOpt: 'help', "Print this message.")
 	o(longOpt: 'hours', args: 1, argName: 'HOURS', "Number of hours to retain the snapshot. Default value is $DA.hours.")
-	n(longOpt: 'name', args: 1, argName: 'NAME', "Name of the snapshot. In case this parameter is speecified, it will be assigned to tag 'Name' of the snapshot. Default value is NULL.")
-	r(longOpt: 'region', args: 1, argName: 'REGION', "Code of region where the volume will be placed. Possible values: ${DA.availableRegions.collect {"'$it'"}.join(", ")}. Default value is '$DA.region'.")
+	m(longOpt: 'months', args: 1, argName: 'MONTHS', "Number of months to retain the snapshot. Default value is $DA.months.")
+	n(longOpt: 'name', args: 1, argName: 'NAME', "Name of the snapshot. In case this parameter is speecified, it will be assigned to tag 'Name' of the snapshot. Not specified by default.")
+	r(longOpt: 'region', args: 1, argName: 'REGION', "Code of region where the EBS volume is placed. Possible values: ${DA.availableRegions.collect {"'$it'"}.join(", ")}. Default value is '$DA.region'.")
 	u(longOpt: 'usage', "Print this message.")
-	v(longOpt: 'verbose', 'Enable a verbose mode of script executing.')
+	v(longOpt: 'verbose', 'Enable a verbose mode for this util.')
 	w(longOpt: 'weeks', args: 1, argName: 'WEEKS', "Number of weeks to retain the snapshot. Default value is $DA.weeks.")
 }
 
@@ -116,21 +119,23 @@ def parseCliArguments = { String[] arguments ->
 
 	credentialsPath = options.c ?: DA.credentials
 	isVerbose = options.v ? true : false
+
 	if (options.name)
 	{
 		name = options.name
 	}
 
-	if (options.w || options.d || options.o)
+	if (options.m || options.w || options.d || options.o)
 	{
+		months = options.m ? options.m?.toInteger() : 0
 		weeks = options.w ? options.w?.toInteger() : 0
 		days = options.d ? options.d?.toInteger() : 0
 		hours = options.o ? options.o?.toInteger() : 0
 	}
 
-	retainHours = weeks * 7 * 24 + days * 24 + hours
+	final int hoursToRetain = months * 30 * 24 + weeks * 7 * 24 + days * 24 + hours
 
-	if (retainHours <= 0)
+	if (hoursToRetain <= 0)
 	{
 		throw new IllegalArgumentException("Incorrect retain period! It must be larger than 0 hours.")
 	}
@@ -158,11 +163,12 @@ def createSnapshots = {
 	ec2Client.endpoint = "ec2.${regionId}.amazonaws.com"
 
 	Date expirationDate = new Date()
+	expirationDate.month += months
 	expirationDate.date += (weeks * 7 + days)
 	expirationDate.hours += hours
 
 	volumeIds.each {String volumeId ->
-		printInVerboseMode "Creating snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
+		printInVerboseMode "Creating snapshot of volume \"$volumeId\" in region \"$regionId\" and retain it for $months months, $weeks weeks, $days days and $hours hours…"
 
 		final CreateSnapshotRequest request = new CreateSnapshotRequest(volumeId, "Automatically created by ebssnap script.")
 
@@ -239,8 +245,7 @@ try
 	loadCredentials()
 	createSnapshots()
 	deleteExpiredSnapshots()
-	sleep 300
-	printInVerboseMode "All operations completed successfuly. Bye!"
+	printInVerboseMode "All operations completed successfully. Bye!"
 }
 catch (ShowHelpException e)
 {
