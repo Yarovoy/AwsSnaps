@@ -14,6 +14,7 @@ import com.amazonaws.services.rds.model.CreateDBSnapshotRequest
 import com.amazonaws.services.rds.model.DBSnapshot
 import com.amazonaws.services.rds.model.DeleteDBSnapshotRequest
 import com.amazonaws.services.rds.model.DescribeDBSnapshotsRequest
+
 import java.text.SimpleDateFormat
 
 // ----------------------------------------------------------------------
@@ -22,6 +23,7 @@ import java.text.SimpleDateFormat
 
 class RdsDefaultArguments
 {
+	public static final int months = 0
 	public static final int weeks = 1
 	public static final int days = 0
 	public static final int hours = 0
@@ -45,6 +47,7 @@ PropertiesCredentials credentials
 
 List instanceIds = []
 
+int months = DA.months
 int weeks = DA.weeks
 int days = DA.days
 int hours = DA.hours
@@ -54,7 +57,6 @@ Boolean isVerbose = false
 // Another variables.
 final String expirationDatePattern = 'yyyy-MM-dd-HH-mm-z'
 final String timeZoneString = 'GMT'
-int retainHours
 
 // Create and configure command-line integration builder.
 CliBuilder cli = new CliBuilder()
@@ -63,10 +65,11 @@ cli.with {
 	c(longOpt: 'credentials', args: 1, argName: 'PATH', "Path to AWS credentials file. Default value is '$DA.credentials'.")
 	d(longOpt: 'days', args: 1, argName: 'DAYS', "Number of days to retain the snapshot. Default value is $DA.days.")
 	h(longOpt: 'help', "Print this message.")
+	m(longOpt: 'months', args: 1, argName: 'MONTHS', "Number of months to retain the snapshot. Default value is $DA.months.")
 	o(longOpt: 'hours', args: 1, argName: 'HOURS', "Number of hours to retain the snapshot. Default value is $DA.hours.")
-	r(longOpt: 'region', args: 1, argName: 'REGION', "Code of region where the volume will be placed. Possible values: ${DA.availableRegions.collect {"'$it'"}.join(", ")}. Default value is '$DA.region'.")
+	r(longOpt: 'region', args: 1, argName: 'REGION', "Code of region where RDS instance is placed. Possible values: ${DA.availableRegions.collect {"'$it'"}.join(", ")}. Default value is '$DA.region'.")
 	u(longOpt: 'usage', "Print this message.")
-	v(longOpt: 'verbose', 'Enable a verbose mode of script executing.')
+	v(longOpt: 'verbose', 'Enable a verbose mode for this util.')
 	w(longOpt: 'weeks', args: 1, argName: 'WEEKS', "Number of weeks to retain the snapshot. Default value is $DA.weeks.")
 }
 
@@ -118,14 +121,15 @@ def parseCliArguments = { String[] arguments ->
 	credentialsPath = options.c ?: DA.credentials
 	isVerbose = options.v ? true : false
 
-	if (options.w || options.d || options.o)
+	if (options.m || options.w || options.d || options.o)
 	{
+		months = options.m ? options.m?.toInteger() : 0
 		weeks = options.w ? options.w?.toInteger() : 0
 		days = options.d ? options.d?.toInteger() : 0
 		hours = options.o ? options.o?.toInteger() : 0
 	}
 
-	retainHours = weeks * 7 * 24 + days * 24 + hours
+	int retainHours = 24 * (months * 30 + weeks * 7 + days) + hours
 
 	if (retainHours <= 0)
 	{
@@ -155,15 +159,15 @@ def createSnapshots = {
 	rdsClient.endpoint = "rds.${regionId}.amazonaws.com"
 
 	Date expirationDate = new Date()
+	expirationDate.month += months
 	expirationDate.date += (weeks * 7 + days)
 	expirationDate.hours += hours
-	//	expirationDate.minutes += 3
 
 	SimpleDateFormat sdf = new SimpleDateFormat(expirationDatePattern)
 	sdf.timeZone = TimeZone.getTimeZone(timeZoneString)
 
 	instanceIds.each {String instanceId ->
-		printInVerboseMode "Createing dbSnapshot for instance \"$instanceId\" in region \"$regionId\" and retain it for $weeks weeks, $days days and $hours hours ($retainHours hour(s) in all)…"
+		printInVerboseMode "Createing dbSnapshot for instance \"$instanceId\" in region \"$regionId\" and retain it for $months months, $weeks weeks, $days days and $hours hours…"
 
 		final CreateDBSnapshotRequest request = new CreateDBSnapshotRequest("rdssnap-$instanceId-${sdf.format(expirationDate)}", instanceId)
 
@@ -182,9 +186,6 @@ def deleteExpiredSnapshots = {
 	final List expiredSnapshots = []
 
 	rdsClient.describeDBSnapshots(new DescribeDBSnapshotsRequest()).DBSnapshots.each {DBSnapshot dbSnapshot ->
-
-		println "Snapshot '$dbSnapshot.DBSnapshotIdentifier' of instance '$dbSnapshot.DBInstanceIdentifier'"
-
 		dbSnapshot.DBSnapshotIdentifier.eachMatch(~/rdssnap-(\w+)-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\w+)/) {
 			final Date expirationDate = Date.parse(expirationDatePattern, it[2])
 			if (expirationDate < new Date())
@@ -219,7 +220,6 @@ try
 	loadCredentials()
 	createSnapshots()
 	deleteExpiredSnapshots()
-	sleep 300
 	printInVerboseMode "All operations completed successfuly. Bye!"
 }
 catch (RdsShowHelpException e)

@@ -6,7 +6,7 @@
 @GrabExclude("org.codehaus.groovy:groovy")
 ])
 
-import DefaultArguments as DA
+import EbsDefaultArguments as DA
 
 import com.amazonaws.AmazonClientException
 import com.amazonaws.auth.PropertiesCredentials
@@ -17,7 +17,7 @@ import com.amazonaws.services.ec2.model.*
 // Inline classes
 // ----------------------------------------------------------------------
 
-class DefaultArguments
+class EbsDefaultArguments
 {
 	public static final int months = 0
 	public static final int weeks = 1
@@ -28,7 +28,7 @@ class DefaultArguments
 	public static final String credentials = './AwsCredentials.properties'
 }
 
-class ShowHelpException extends Exception
+class EbsShowHelpException extends Exception
 {}
 
 // ----------------------------------------------------------------------
@@ -94,7 +94,7 @@ def parseCliArguments = { String[] arguments ->
 
 	if (options.h || options.u)
 	{
-		throw new ShowHelpException()
+		throw new EbsShowHelpException()
 	}
 
 	if (!options.arguments()
@@ -247,7 +247,7 @@ try
 	deleteExpiredSnapshots()
 	printInVerboseMode "All operations completed successfully. Bye!"
 }
-catch (ShowHelpException e)
+catch (EbsShowHelpException e)
 {
 	cli.usage()
 }
