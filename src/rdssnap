@@ -1,7 +1,7 @@
 #!/usr/bin/groovy
 
 @Grapes([
-@Grab(group = 'com.amazonaws', module = 'aws-java-sdk', version = '1.3.8'),
+@Grab(group = 'com.amazonaws', module = 'aws-java-sdk', version = '1.4.1'),
 @Grab(group = 'stax', module = 'stax', version = '1.2.0'),
 @GrabExclude("org.codehaus.groovy:groovy")
 ])
