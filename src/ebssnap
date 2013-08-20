@@ -1,4 +1,4 @@
-#!/usr/bin/groovy
+#!/usr/bin/env groovy
 
 @Grapes([
 @Grab(group = 'com.amazonaws', module = 'aws-java-sdk', version = '1.4.1'),
